@@ -88,6 +88,17 @@ if pgrep -xq "$APP_NAME"; then
     echo "$APP_NAME is running. Quit it and run this script again." >&2
     exit 1
 fi
+# The root helper exits ~10 s after its last client disconnects; replacing the bundle while it
+# runs would leave the old helper binary serving requests until then.
+for (( waited = 0; waited < 30; waited++ )); do
+    pgrep -xq "${APP_NAME}Helper" || break
+    (( waited == 0 )) && echo "Waiting for ${APP_NAME}Helper to exit..."
+    sleep 1
+done
+if pgrep -xq "${APP_NAME}Helper"; then
+    echo "${APP_NAME}Helper is still running after 30 s. Quit MacAudit, wait a moment, and run this script again." >&2
+    exit 1
+fi
 if [[ -e "$target" ]]; then
     existing_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$target/Contents/Info.plist" 2>/dev/null || true)"
     if [[ "$existing_id" != "$BUNDLE_ID" ]]; then
