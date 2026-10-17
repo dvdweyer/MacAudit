@@ -23,7 +23,7 @@ xcodebuild -project MacAudit.xcodeproj -scheme MacAudit -derivedDataPath /tmp/ma
 scripts/release.sh [--notary-profile NAME] [--skip-install]
 ```
 
-Versioning: `MARKETING_VERSION` in `project.yml` and `AuditEngine.toolVersion` in `Engine/Engine.swift` must match. Bump only when app/package code changes (not for scripts/docs); tags are `vX.Y.Z` on the commit that carries the version.
+Versioning: `MARKETING_VERSION` (project-level settings in `project.yml`, shared by app and helper) and `AuditEngine.toolVersion` in `Engine/Engine.swift` must match. Bump only when app/package code changes (not for scripts/docs); tags are `vX.Y.Z` on the commit that carries the version.
 
 ## Architecture
 
@@ -32,6 +32,7 @@ Versioning: `MARKETING_VERSION` in `project.yml` and `AuditEngine.toolVersion` i
 - **AuditItem ids are stable keys** (e.g. `tcc:<service>:<client>`, `firewall:app:<path>`); `ReportDiff` matches snapshots by id, so don't put volatile values in ids.
 - **Findings** carry a `Severity` (info/notice/warning/critical) and a rationale. Keep false positives down: Apple defaults, Safari web apps, TestFlight builds and root-unreadable files (`SigningInfo.Status.unreadable`) are deliberately not flagged.
 - **Parsing is separated from I/O**: parsers are pure `static func`s in `extension Parsers` next to each collector, tested in `Tests/AuditKitTests/ParserTests.swift` against captured real output. Add a fixture test when changing a parser.
+- **Root access** (`Infra/Privileged.swift`, `Infra/PrivilegedHelper.swift`, `MacAuditHelper/`): collectors never check for root themselves. They use `context.privileged` (`section.runPrivileged`, `section.readPrivileged`, `privileged.listDirectory/listeningSockets`), and `CodeSignInspector` falls back to it for unreadable files. It is `LocalPrivilegedAccess` when the process is root (CLI under sudo), `XPCPrivilegedAccess` when the app's SMAppService helper is enabled, otherwise nil (add a coverage note with `Privileges.rootHint`). New root-only reads must be added to `PrivilegedPolicy` (commands/paths); the helper sandboxes itself against all file writes. The audit itself always runs as the user, so per-user preferences stay correct. Running everything in the sandboxed helper isn't possible because `system_profiler SPiBridgeDataType` and `pluginkit -A` return nothing inside any sandbox.
 - **Infra**: `CodeSignInspector` (actor, SecStaticCode: Apple/App Store/Developer ID/notarized/TestFlight/ad-hoc), `PlistReader`, `SQLiteSnapshotReader`, `DirectoryService` (OpenDirectory), `ProcSockets` (libproc), `Privileges` (root / FDA detection).
 - **Reports** (`Report/`): JSON (sorted keys, ISO-8601, `schemaVersion`), self-contained HTML, text, `ReportDiff`, `SnapshotStore` (`~/Library/Application Support/MacAudit/Snapshots`). The app makes PDF from the HTML via an offscreen WKWebView.
 
