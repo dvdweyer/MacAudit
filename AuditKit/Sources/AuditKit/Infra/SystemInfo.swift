@@ -4,12 +4,16 @@ import Darwin
 public enum Privileges {
     public static var isRoot: Bool { geteuid() == 0 }
 
-    /// The user TCC database is only openable with Full Disk Access. Opening for read is side-effect free.
+    /// TCC databases are only openable with Full Disk Access. Opening for read is side-effect free.
+    /// The system one is probed first because the per-user database may not exist (it doesn't on some macOS 27 installs).
     public static var hasFullDiskAccess: Bool {
-        let path = NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db"
-        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
-        try? handle.close()
-        return true
+        let paths = ["/Library/Application Support/com.apple.TCC/TCC.db",
+                     NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db"]
+        return paths.contains { path in
+            guard let handle = FileHandle(forReadingAtPath: path) else { return false }
+            try? handle.close()
+            return true
+        }
     }
 
     public static let fullDiskAccessSettingsURL =

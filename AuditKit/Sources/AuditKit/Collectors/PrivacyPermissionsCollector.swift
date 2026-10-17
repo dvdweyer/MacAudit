@@ -11,9 +11,19 @@ public struct PrivacyPermissionsCollector: Collector {
     static let systemDB = "/Library/Application Support/com.apple.TCC/TCC.db"
     static let mdmOverrides = "/Library/Application Support/com.apple.TCC/MDMOverrides.plist"
     static let locationClients = "/var/db/locationd/clients.plist"
+    static let protectedContainers = "/private/var/containers/Data/ProtectedSystem/"
+
+    /// macOS 27 moved the per-user database from ~/Library into a ProtectedSystem container with a per-install UUID.
+    /// The path is taken from the files the user's own tccd has open.
+    static func userDatabasePath(home: String) -> String {
+        let legacy = home + "/Library/Application Support/com.apple.TCC/TCC.db"
+        if FileManager.default.fileExists(atPath: legacy) { return legacy }
+        let open = ProcFiles.pids(named: "tccd").flatMap(ProcFiles.openPaths)
+        return open.first { $0.hasSuffix("/com.apple.TCC/TCC.db") && $0 != systemDB } ?? legacy
+    }
 
     public func collect(into section: inout SectionResult, context: AuditContext) async {
-        let userDB = context.homeDirectory + "/Library/Application Support/com.apple.TCC/TCC.db"
+        let userDB = Self.userDatabasePath(home: context.homeDirectory)
         var unreadable: [String] = []
         for (scope, path) in [("User", userDB), ("System", Self.systemDB)] {
             section.note(file: path)
@@ -31,7 +41,13 @@ public struct PrivacyPermissionsCollector: Collector {
         }
 
         if !unreadable.isEmpty {
-            let hint = context.hasFullDiskAccess ? "" : " Grant Full Disk Access in System Settings › Privacy & Security."
+            let hint = if !context.hasFullDiskAccess {
+                " Grant Full Disk Access in System Settings › Privacy & Security."
+            } else if unreadable == ["user"], userDB.hasPrefix(Self.protectedContainers) {
+                " Since macOS 27 the per-user database lives in a protected system container that Full Disk Access does not unlock, so user-level grants (Camera, Microphone, Automation, Files & Folders, …) are not shown."
+            } else {
+                ""
+            }
             section.coverage.degrade(to: unreadable.count == 2 ? .unavailable : .partial,
                                      "Could not read the \(unreadable.joined(separator: " and ")) TCC database.\(hint)")
         }
