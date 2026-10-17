@@ -21,6 +21,8 @@ public struct UsersCollector: Collector {
             return
         }
         let admins = Set(DirectoryService.groupMembers("admin"))
+        section.note(api: "utmpx (wtmp login records)")
+        let logins = LoginHistory.latestLogins()
 
         let human = users.filter { u in
             let uid = Int(u.first(kODAttributeTypeUniqueID) ?? "") ?? -1
@@ -52,6 +54,11 @@ public struct UsersCollector: Collector {
                 }
                 if let failed = dict["failedLoginCount"] as? Int { details["Failed login count"] = "\(failed)" }
             }
+            if let login = logins[user.name] {
+                details["Last login"] = "\(login.date.auditString) (\(login.line))"
+            } else {
+                details["Last login"] = "None recorded"
+            }
             if let r = await section.run(.secureTokenStatus(user: user.name), context: context) {
                 details["Secure Token"] = r.combined.contains("ENABLED") ? "Enabled" : "Disabled"
             }
@@ -80,7 +87,24 @@ public struct UsersCollector: Collector {
                                       rationale: "A password-enabled root account allows direct root login.")] : []))
         }
 
+        await collectPasswordPolicy(into: &section, context: context)
         collectSudoers(into: &section, context: context)
+    }
+
+    private func collectPasswordPolicy(into section: inout SectionResult, context: AuditContext) async {
+        guard let r = await section.run(.passwordPolicies, context: context) else { return }
+        let group = "Password policy"
+        let policies = Parsers.passwordPolicies(r.combined)
+        let minLength = Parsers.minimumPasswordLength(policies)
+        section.add(AuditItem(
+            id: "users:pwpolicy:minlength", group: group, title: "Minimum password length",
+            value: minLength.map(String.init) ?? "Not enforced",
+            findings: (minLength ?? 0) < 8 ? [Finding(.info, "Short minimum password length",
+                rationale: "Local account passwords can be shorter than 8 characters. The login password also protects FileVault and the keychain.")] : []))
+        for policy in policies {
+            section.add(AuditItem(id: "users:pwpolicy:\(policy.identifier)", group: group, title: policy.identifier,
+                                  value: policy.content, details: ["Category": policy.category]))
+        }
     }
 
     private func collectSudoers(into section: inout SectionResult, context: AuditContext) {
@@ -107,6 +131,35 @@ public struct UsersCollector: Collector {
 }
 
 extension Parsers {
+    struct PasswordPolicy: Equatable {
+        var category: String
+        var identifier: String
+        var content: String
+    }
+
+    /// `pwpolicy -getaccountpolicies` prints a header line followed by a plist.
+    static func passwordPolicies(_ output: String) -> [PasswordPolicy] {
+        guard let start = output.range(of: "<?xml"), let end = output.range(of: "</plist>", options: .backwards),
+              let plist = try? PropertyListSerialization.propertyList(
+                from: Data(output[start.lowerBound..<end.upperBound].utf8), format: nil) as? [String: Any]
+        else { return [] }
+        return plist.keys.sorted().flatMap { category in
+            (plist[category] as? [[String: Any]] ?? []).map { p in
+                PasswordPolicy(category: category,
+                               identifier: p["policyIdentifier"] as? String ?? "unnamed",
+                               content: p["policyContent"] as? String ?? "")
+            }
+        }
+    }
+
+    /// Minimum length from content rules like `policyAttributePassword matches '.{8,}+'`.
+    static func minimumPasswordLength(_ policies: [PasswordPolicy]) -> Int? {
+        policies.filter { $0.category == "policyCategoryPasswordContent" }.compactMap { policy -> Int? in
+            guard let range = policy.content.range(of: #"\.\{(\d+),"#, options: .regularExpression) else { return nil }
+            return Int(policy.content[range].dropFirst(2).dropLast())
+        }.max()
+    }
+
     static func sudoRules(_ text: String) -> [String] {
         let defaultRules: Set<String> = ["root ALL = (ALL) ALL", "%admin ALL = (ALL) ALL", "root ALL=(ALL) ALL", "%admin ALL=(ALL) ALL"]
         return text.split(separator: "\n").compactMap { raw in

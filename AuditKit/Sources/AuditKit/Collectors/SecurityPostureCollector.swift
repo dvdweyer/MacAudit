@@ -77,8 +77,44 @@ public struct SecurityPostureCollector: Collector {
                                       rationale: "No Find My token was found in NVRAM. If Find My is off, Activation Lock and remote lock/erase are unavailable.")]))
         }
 
+        await collectBootSecurity(into: &section, context: context)
         await collectLogin(into: &section)
         await collectFirewall(into: &section, context: context)
+    }
+
+    private func collectBootSecurity(into section: inout SectionResult, context: AuditContext) async {
+        guard let r = await section.run(.bootPolicy, context: context) else { return }
+        guard let policy = Parsers.bootPolicy(r.stdout) else {
+            section.coverage.degrade(to: .partial, "Boot security policy not reported by system_profiler.")
+            return
+        }
+        let group = "Boot security"
+        func add(_ key: String, _ title: String, findings: (String) -> [Finding] = { _ in [] }) {
+            guard let value = policy[key] else { return }
+            section.add(AuditItem(id: "security:boot:\(key)", group: group, title: title, value: value, findings: findings(value)))
+        }
+        add("ibridge_secure_boot", "Startup security") { value in
+            value == "Full Security" ? [] : [Finding(.warning, "Startup security is not Full Security",
+                rationale: "\(value) allows booting macOS versions that Apple no longer signs and, depending on settings, loading third-party kernel extensions.")]
+        }
+        add("ibridge_sb_ssv", "Signed System Volume") { value in
+            value == "Enabled" ? [] : [Finding(.critical, "Signed System Volume is disabled",
+                rationale: "The system volume is no longer cryptographically sealed, so modifications to macOS are not detected at boot.")]
+        }
+        add("ibridge_sb_ctrr", "Kernel CTRR") { value in
+            value == "Enabled" ? [] : [Finding(.warning, "Kernel integrity protection (CTRR) is disabled",
+                rationale: "CTRR keeps kernel code read-only after boot, blocking kernel code modification.")]
+        }
+        add("ibridge_sb_other_kext", "Allow user-managed kernel extensions") { value in
+            value == "Yes" ? [Finding(.notice, "Third-party kernel extensions are allowed",
+                rationale: "Kernel extensions run with full kernel privileges; Apple recommends system extensions instead.")] : []
+        }
+        add("ibridge_sb_boot_args", "Boot arguments filtering") { value in
+            value == "Enabled" ? [] : [Finding(.notice, "Boot arguments filtering is disabled",
+                rationale: "Arbitrary kernel boot arguments can be set, some of which weaken security.")]
+        }
+        add("ibridge_sb_manual_mdm", "User-approved privileged MDM operations")
+        add("ibridge_sb_device_mdm", "Automated Device Enrollment privileged MDM operations")
     }
 
     private func collectLogin(into section: inout SectionResult) async {
@@ -174,6 +210,15 @@ extension Parsers {
     static func sipEnabled(_ output: String) -> Bool {
         let first = output.split(separator: "\n").first.map(String.init) ?? ""
         return first.contains("status: enabled.")
+    }
+
+    /// Values from `system_profiler -json SPiBridgeDataType` (Apple silicon boot policy).
+    static func bootPolicy(_ json: String) -> [String: String]? {
+        guard let data = json.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let entry = (root["SPiBridgeDataType"] as? [[String: Any]])?.first,
+              entry["ibridge_secure_boot"] != nil else { return nil }
+        return entry.compactMapValues { ($0 as? String)?.trimmed }
     }
 
     static func screenLockDelay(_ output: String) -> String? {

@@ -266,4 +266,52 @@ import Foundation
         #expect(items[0]["Disposition"] == "[enabled, allowed, visible, notified] (0xb)")
         #expect(items[1]["Identifier"] == "2.com.example.other")
     }
+
+    @Test func bootPolicy() {
+        let json = """
+        {
+          "SPiBridgeDataType" : [
+            {
+              "ibridge_build" : "mBoot-20457.1.29",
+              "ibridge_extra_boot_policies" : " ",
+              "ibridge_sb_boot_args" : "Enabled",
+              "ibridge_sb_ctrr" : "Enabled",
+              "ibridge_sb_other_kext" : "No",
+              "ibridge_sb_ssv" : "Enabled",
+              "ibridge_secure_boot" : "Full Security"
+            }
+          ]
+        }
+        """
+        let policy = Parsers.bootPolicy(json)
+        #expect(policy?["ibridge_secure_boot"] == "Full Security")
+        #expect(policy?["ibridge_sb_other_kext"] == "No")
+        #expect(Parsers.bootPolicy(#"{"SPiBridgeDataType" : []}"#) == nil)
+    }
+
+    @Test func passwordPolicies() {
+        let output = """
+        Getting global account policies
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+        	<key>policyCategoryPasswordContent</key>
+        	<array>
+        		<dict>
+        			<key>policyContent</key>
+        			<string>policyAttributePassword matches '.{4,}+'</string>
+        			<key>policyIdentifier</key>
+        			<string>com.apple.defaultpasswordpolicy.fde</string>
+        		</dict>
+        	</array>
+        </dict>
+        </plist>
+        """
+        let policies = Parsers.passwordPolicies(output)
+        #expect(policies == [.init(category: "policyCategoryPasswordContent", identifier: "com.apple.defaultpasswordpolicy.fde",
+                                   content: "policyAttributePassword matches '.{4,}+'")])
+        #expect(Parsers.minimumPasswordLength(policies) == 4)
+        #expect(Parsers.passwordPolicies("Getting global account policies\nNo policies") == [])
+    }
 }

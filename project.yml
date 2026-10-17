@@ -28,5 +28,5 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: MacAudit
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
-        MARKETING_VERSION: "0.0.3"
+        MARKETING_VERSION: "0.0.4"
         CURRENT_PROJECT_VERSION: "1"

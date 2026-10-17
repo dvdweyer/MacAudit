@@ -45,10 +45,13 @@ public struct SharingCollector: Collector {
              "Other devices can stream to this Mac."),
             ("mediasharing", "Media Sharing", PlistReader.boolPreference("home-sharing-enabled", domain: "com.apple.amp.mediasharingd") ?? false, .info,
              "The media library is shared on the local network."),
+            ("bluetoothsharing", "Bluetooth Sharing", Self.bluetoothSharingEnabled(), .notice,
+             "Nearby Bluetooth devices can send files to or browse files on this Mac."),
         ]
         section.note(file: "/Library/Preferences/SystemConfiguration/com.apple.nat.plist")
         section.note(file: "/Library/Preferences/com.apple.AssetCache.plist")
-        section.note(api: "CFPreferences (com.apple.controlcenter, com.apple.amp.mediasharingd)")
+        section.note(api: "CFPreferences (com.apple.controlcenter, com.apple.amp.mediasharingd, com.apple.Bluetooth ByHost)")
+        section.note(api: "libproc (OBEXAgent process)")
 
         for s in services {
             section.add(AuditItem(id: "sharing:\(s.key)", group: group, title: s.title, value: s.enabled ? "On" : "Off",
@@ -73,6 +76,13 @@ public struct SharingCollector: Collector {
                     findings: findings))
             }
         }
+    }
+
+    /// OBEXAgent serves Bluetooth Sharing and only runs while it is on. The ByHost key is how older macOS stored the setting.
+    static func bluetoothSharingEnabled() -> Bool {
+        let key = CFPreferencesCopyValue("PrefKeyServicesEnabled" as CFString, "com.apple.Bluetooth" as CFString,
+                                         kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
+        return (key as? Bool ?? false) || !ProcFiles.pids(named: "OBEXAgent").isEmpty
     }
 
     static func remoteManagementEnabled() -> Bool {

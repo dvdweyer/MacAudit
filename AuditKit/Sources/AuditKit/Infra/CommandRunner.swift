@@ -31,6 +31,8 @@ public enum AllowedCommand: Sendable, Hashable, CaseIterable {
     case screenLockStatus
     case authorizationdbLoginConsole
     case launchctlPrintDisabledUser(uid: UInt32)
+    case bootPolicy
+    case passwordPolicies
 
     public static var allCases: [AllowedCommand] {
         [.csrutilStatus, .spctlStatus, .fdesetupStatus, .firewallGlobalState, .firewallStealthMode,
@@ -40,7 +42,7 @@ public enum AllowedCommand: Sendable, Hashable, CaseIterable {
          .profilesEnrollmentStatus, .profilesShowConfiguration, .secureTokenStatus(user: "nobody"),
          .tmutilDestinationInfo, .tmutilLatestBackup, .sfltoolDumpBTM, .crontabList,
          .nvramFindMyToken, .sharingList, .cupsSettings, .screenLockStatus,
-         .authorizationdbLoginConsole, .launchctlPrintDisabledUser(uid: 501)]
+         .authorizationdbLoginConsole, .launchctlPrintDisabledUser(uid: 501), .bootPolicy, .passwordPolicies]
     }
 
     private static let firewall = "/usr/libexec/ApplicationFirewall/socketfilterfw"
@@ -76,6 +78,9 @@ public enum AllowedCommand: Sendable, Hashable, CaseIterable {
         case .screenLockStatus: ("/usr/sbin/sysadminctl", ["-screenLock", "status"])
         case .authorizationdbLoginConsole: ("/usr/bin/security", ["authorizationdb", "read", "system.login.console"])
         case .launchctlPrintDisabledUser(let uid): ("/bin/launchctl", ["print-disabled", "gui/\(uid)"])
+        // Unlike `bputil -d`, this works without root.
+        case .bootPolicy: ("/usr/sbin/system_profiler", ["-json", "SPiBridgeDataType"])
+        case .passwordPolicies: ("/usr/bin/pwpolicy", ["-getaccountpolicies"])
         }
     }
 

@@ -61,7 +61,7 @@ public enum AuditProgress: Sendable {
 }
 
 public struct AuditEngine: Sendable {
-    public static let toolVersion = "0.0.3"
+    public static let toolVersion = "0.0.4"
 
     public var collectors: [any Collector]
 
