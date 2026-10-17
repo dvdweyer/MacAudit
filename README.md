@@ -52,14 +52,27 @@ The script replaces an existing `/Applications/MacAudit.app`. It won't overwrite
 
 ### Privileged helper
 
-The helper is a launch daemon embedded in the app (`Contents/Library/LaunchDaemons`) and registered with `SMAppService`. The app keeps auditing as you, and only root-only reads go to the helper. It stays read-only in four ways:
+The helper is a launch daemon embedded in the app (`Contents/Library/LaunchDaemons`) and registered with `SMAppService`. The app keeps auditing as you, and only root-only reads go to the helper.
 
-- It answers only the requests in `PrivilegedRequest`: run a command, read a file, list a directory, inspect a code signature, list sockets.
-- `PrivilegedPolicy` limits these further. Only two allowlisted commands (`sfltool dumpbtm`, `profiles show`) and a fixed set of root-only paths are accepted. Paths are resolved with `realpath` before checking, so `..` and symlinks can't get around the list.
-- At startup the helper puts itself in a sandbox that denies every file write outside temporary folders. Child processes inherit it, so this is enforced by macOS, not just by MacAudit's code. The helper refuses to start if the sandbox can't be applied.
-- It only accepts XPC connections from MacAudit signed by the same team, and the app only talks to a helper signed by that team.
+**Who can use it.** Only administrators: members of `admin`, checked for every connection. They could read the same data with `sudo`, so the helper saves them a password but gives no new access. A Release helper only accepts the Developer ID-signed app. Debug builds can be attached with a debugger, so only a Debug helper accepts them. The app only talks to a helper signed by the same team.
 
-The helper exits ten seconds after the last connection closes, and launchd starts it again when needed.
+**What it can do.** Only the requests in `PrivilegedRequest`, further limited by `PrivilegedPolicy`:
+- run two allowlisted commands (`sfltool dumpbtm`, `profiles show`)
+- read a fixed set of root-only paths, plus the caller's **own** per-user TCC database (found from the files that user's `tccd` has open)
+- list two directories
+- check code signatures in system and app locations, `/Users/Shared`, temporary folders and the caller's home (not other users' homes)
+- list listening sockets
+
+Paths are resolved with `realpath` before checking, so `..` and symlinks can't get around the list.
+
+**Enforced by macOS.** At startup the helper puts itself in a sandbox, and the commands it runs inherit it:
+- writes are allowed only in its own temporary and cache folders;
+- IP networking is blocked;
+- only the two allowlisted commands can be launched.
+
+The helper refuses to start if the sandbox can't be applied. It exits ten seconds after the last connection closes (or after starting, if no connection was accepted), and launchd starts it again when needed.
+
+Other users' crontabs are recorded as schedule and program only; arguments can contain credentials. Snapshots are stored with permissions 0600 in a 0700 folder.
 
 `sudo macaudit` runs the same root-only reads in-process, without the sandbox.
 

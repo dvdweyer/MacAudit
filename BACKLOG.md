@@ -1,12 +1,14 @@
 # Backlog
 
-Known coverage gaps and unverified areas, as of v0.0.5.
+Known coverage gaps and unverified areas, as of v0.0.6.
 
 ## Verify with the privileged helper (needs a real root run)
 
 The helper and `sudo macaudit` now cover the root-only data below, but none of it has been seen working as root yet: root can't be run unattended from the dev session. Install the helper, run an audit, and check each item.
 
 - [ ] Helper registration and approval flow (Settings › Root access, then System Settings › Login Items & Extensions)
+- [ ] A standard (non-admin) account is refused by the helper, and the root-access notes still appear in its report
+- [ ] `sfltool dumpbtm` and `profiles show` still work as root under the tightened sandbox (own scratch folders only, no IP networking, exec limited to those two programs)
 - [ ] Login and background items: `sfltool dumpbtm` under the helper's no-write sandbox, and the `btmDump` parser on real output (it has only seen synthetic output so far)
 - [ ] Device-level profiles: `profiles show -type configuration` as root under the sandbox, and the `configurationProfiles` parser on device-level output
 - [ ] Location Services clients (`/var/db/locationd/clients.plist`)
