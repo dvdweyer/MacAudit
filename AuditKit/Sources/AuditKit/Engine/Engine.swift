@@ -4,16 +4,18 @@ public struct AuditContext: Sendable {
     public var runner: CommandRunner
     public var signing: CodeSignInspector
     public var homeDirectory: String
-    public var isRoot: Bool
+    /// Root-only reads, via this process (when root) or the helper daemon. nil: root-only data is skipped.
+    public var privileged: (any PrivilegedAccess)?
     public var hasFullDiskAccess: Bool
 
-    public init(runner: CommandRunner = CommandRunner(), signing: CodeSignInspector = CodeSignInspector(),
-                homeDirectory: String = NSHomeDirectory(), isRoot: Bool = Privileges.isRoot,
+    public init(runner: CommandRunner = CommandRunner(),
+                privileged: (any PrivilegedAccess)? = Privileges.isRoot ? LocalPrivilegedAccess() : nil,
+                homeDirectory: String = NSHomeDirectory(),
                 hasFullDiskAccess: Bool = Privileges.hasFullDiskAccess) {
         self.runner = runner
-        self.signing = signing
+        self.signing = CodeSignInspector(privileged: privileged)
         self.homeDirectory = homeDirectory
-        self.isRoot = isRoot
+        self.privileged = privileged
         self.hasFullDiskAccess = hasFullDiskAccess
     }
 }
@@ -49,6 +51,42 @@ extension SectionResult {
         }
     }
 
+    /// Runs a command with root privileges when available, otherwise as the current user.
+    @discardableResult
+    mutating func runPrivileged(_ command: AllowedCommand, context: AuditContext,
+                                expectNonZeroExit: Bool = false) async -> CommandResult? {
+        guard let privileged = context.privileged else {
+            return await run(command, context: context, expectNonZeroExit: expectNonZeroExit)
+        }
+        sources.append(.command(command.displayString + " (as root)"))
+        do {
+            let result = try await privileged.run(command)
+            if result.timedOut {
+                coverage.degrade(to: .partial, "\(command.displayString) timed out")
+                return nil
+            }
+            if !result.succeeded && !expectNonZeroExit && result.combined.isEmpty {
+                coverage.degrade(to: .partial, "\(command.displayString) exited with \(result.exitCode)")
+            }
+            return result
+        } catch {
+            coverage.degrade(to: .partial, "\(command.displayString) as root: \(error)")
+            return nil
+        }
+    }
+
+    /// Reads a root-only file through the privileged channel, recording it as a data source.
+    mutating func readPrivileged(_ path: String, context: AuditContext) async -> Data? {
+        guard let privileged = context.privileged else { return nil }
+        sources.append(.file(path + " (as root)"))
+        do {
+            return try await privileged.readFile(path)
+        } catch {
+            coverage.degrade(to: .partial, "Could not read \(path) as root: \(error)")
+            return nil
+        }
+    }
+
     mutating func add(_ item: AuditItem) { items.append(item) }
 
     mutating func note(file path: String) { sources.append(.file(path)) }
@@ -61,7 +99,7 @@ public enum AuditProgress: Sendable {
 }
 
 public struct AuditEngine: Sendable {
-    public static let toolVersion = "0.0.4"
+    public static let toolVersion = "0.0.5"
 
     public var collectors: [any Collector]
 

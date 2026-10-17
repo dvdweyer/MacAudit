@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: org.afaik
   deploymentTarget:
     macOS: "26.0"
+settings:
+  base:
+    MARKETING_VERSION: "0.0.5"
+    CURRENT_PROJECT_VERSION: "1"
 packages:
   AuditKit:
     path: AuditKit
@@ -10,10 +14,21 @@ targets:
   MacAudit:
     type: application
     platform: macOS
-    sources: [MacAudit]
+    sources:
+      - path: MacAudit
+      - path: MacAuditHelper/org.afaik.MacAudit.helper.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchDaemons
     dependencies:
       - package: AuditKit
         product: AuditKit
+      - target: MacAuditHelper
+        embed: true
+        codeSign: false
+        copy:
+          destination: executables
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.afaik.MacAudit
@@ -28,5 +43,23 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: MacAudit
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
-        MARKETING_VERSION: "0.0.4"
-        CURRENT_PROJECT_VERSION: "1"
+  MacAuditHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: MacAuditHelper
+        excludes: ["*.plist"]
+    dependencies:
+      - package: AuditKit
+        product: AuditKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.afaik.MacAudit.helper
+        PRODUCT_NAME: MacAuditHelper
+        DEVELOPMENT_TEAM: R4J8ZNC9HF
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_VERSION: "6.0"
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: YES
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES

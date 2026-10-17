@@ -25,7 +25,14 @@ struct MacAuditApp: App {
                 Button("Export PDF…") { model.export(.pdf) }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                     .disabled(model.report == nil)
+                Divider()
+                SettingsLink { Text("Root Access…") }
             }
+        }
+
+        Settings {
+            SettingsView()
+                .environment(model)
         }
     }
 }

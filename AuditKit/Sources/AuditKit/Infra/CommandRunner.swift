@@ -2,7 +2,7 @@ import Foundation
 
 /// The complete set of external programs the auditor may execute. Every case maps to a
 /// SIP-protected Apple binary with fixed, read-only arguments; nothing is passed through a shell.
-public enum AllowedCommand: Sendable, Hashable, CaseIterable {
+public enum AllowedCommand: Codable, Sendable, Hashable, CaseIterable {
     case csrutilStatus
     case spctlStatus
     case fdesetupStatus
@@ -97,7 +97,7 @@ public enum AllowedCommand: Sendable, Hashable, CaseIterable {
     }
 }
 
-public struct CommandResult: Sendable {
+public struct CommandResult: Codable, Sendable {
     public var exitCode: Int32
     public var stdout: String
     public var stderr: String

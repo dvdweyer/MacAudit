@@ -104,12 +104,12 @@ public struct PersistenceCollector: Collector {
     }
 
     private func collectBackgroundItems(into section: inout SectionResult, context: AuditContext) async {
-        guard context.isRoot else {
+        guard context.privileged != nil else {
             section.coverage.degrade(to: .partial,
-                "Login Items & background items (Background Task Management database) require root (run `sudo macaudit`).")
+                "Login Items & background items (Background Task Management database): \(Privileges.rootHint).")
             return
         }
-        guard let r = await section.run(.sfltoolDumpBTM, context: context) else { return }
+        guard let r = await section.runPrivileged(.sfltoolDumpBTM, context: context) else { return }
         for entry in Parsers.btmDump(r.stdout) {
             let name = entry["Name"] ?? entry["Identifier"] ?? "Item"
             let id = entry["Identifier"] ?? name
@@ -128,14 +128,24 @@ public struct PersistenceCollector: Collector {
             }
         }
         let tabs = "/usr/lib/cron/tabs"
-        if context.isRoot {
-            for user in FileManager.default.contents(ofDirectory: tabs) where user != NSUserName() {
-                section.add(AuditItem(id: "persist:cron:tab:\(user)", group: "Cron jobs", title: "crontab for \(user)",
-                                      value: "Present", findings: [Finding(.notice, "Cron table present",
-                                          rationale: "Review scheduled commands for this user.")]))
+        if let privileged = context.privileged {
+            section.note(file: tabs + " (as root)")
+            do {
+                for user in try await privileged.listDirectory(tabs) where user != NSUserName() {
+                    let text = await section.readPrivileged(tabs + "/" + user, context: context)
+                        .map { String(decoding: $0, as: UTF8.self) } ?? ""
+                    let jobs = text.split(separator: "\n").map { String($0).trimmed }.filter { !$0.isEmpty && !$0.hasPrefix("#") }
+                    section.add(AuditItem(id: "persist:cron:tab:\(user)", group: "Cron jobs", title: "crontab for \(user)",
+                                          value: jobs.isEmpty ? "Present" : "\(jobs.count) job(s)",
+                                          details: jobs.isEmpty ? [:] : ["Jobs": jobs.joined(separator: "\n")],
+                                          findings: [Finding(.notice, "Cron table present",
+                                              rationale: "Review scheduled commands for this user.")]))
+                }
+            } catch {
+                section.coverage.degrade(to: .partial, "Could not list \(tabs) as root: \(error)")
             }
         } else {
-            section.coverage.degrade(to: .partial, "Other users' crontabs require root.")
+            section.coverage.degrade(to: .partial, "Other users' crontabs: \(Privileges.rootHint).")
         }
         if FileManager.default.fileExists(atPath: "/etc/crontab") {
             section.add(AuditItem(id: "persist:cron:etc", group: "Cron jobs", title: "/etc/crontab", value: "Present",

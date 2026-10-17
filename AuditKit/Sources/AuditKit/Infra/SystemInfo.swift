@@ -4,6 +4,9 @@ import Darwin
 public enum Privileges {
     public static var isRoot: Bool { geteuid() == 0 }
 
+    /// Appended to coverage notes for data that needs root.
+    public static let rootHint = "requires root (install the privileged helper in MacAudit, or run `sudo macaudit`)"
+
     /// TCC databases are only openable with Full Disk Access. Opening for read is side-effect free.
     /// The system one is probed first because the per-user database may not exist (it doesn't on some macOS 27 installs).
     public static var hasFullDiskAccess: Bool {

@@ -81,4 +81,74 @@ import SQLite3
         #expect(c.status == .unavailable)
         #expect(c.notes == ["a", "b", "c"])
     }
+
+    @Test func privilegedPolicyOnlyAllowsRootOnlyReads() {
+        #expect(PrivilegedPolicy.commands.allSatisfy { AllowedCommand.allCases.contains($0) })
+        #expect(PrivilegedPolicy.canRun(.sfltoolDumpBTM))
+        #expect(!PrivilegedPolicy.canRun(.netstat))
+
+        #expect(PrivilegedPolicy.canRead("/etc/sudoers"))
+        #expect(!PrivilegedPolicy.canRead("/etc/master.passwd"))
+        #expect(!PrivilegedPolicy.canRead("/etc/sudoers.d/../master.passwd"))
+        #expect(!PrivilegedPolicy.canRead("etc/sudoers"))
+        #expect(PrivilegedPolicy.canList("/etc/sudoers.d"))
+        #expect(!PrivilegedPolicy.canList("/etc"))
+
+        let tcc = "/private/var/containers/Data/ProtectedSystem/B97B32AB-3D8F-46A2-A0A6-18C2E5C2B0CE/Data/Library/Application Support/com.apple.TCC/"
+        #expect(PrivilegedPolicy.isUserTCCDatabase(tcc + "TCC.db"))
+        #expect(PrivilegedPolicy.isUserTCCDatabase(tcc + "TCC.db-wal"))
+        #expect(!PrivilegedPolicy.isUserTCCDatabase(tcc + "other.db"))
+        #expect(!PrivilegedPolicy.isUserTCCDatabase(tcc.replacingOccurrences(of: "B97B32AB-3D8F-46A2-A0A6-18C2E5C2B0CE", with: "x/y") + "TCC.db"))
+    }
+
+    @Test func privilegedPolicyResolvesSymlinks() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("policy-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let link = dir.appendingPathComponent("sudoers")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "/etc/master.passwd")
+        #expect(!PrivilegedPolicy.canRead(link.path))
+    }
+
+    @Test func privilegedServiceRejectsRequestsOutsidePolicy() async {
+        let service = PrivilegedService()
+        await #expect(throws: PrivilegedError.self) { try await service.handle(.run(.netstat)) }
+        await #expect(throws: PrivilegedError.self) { try await service.handle(.readFile("/etc/master.passwd")) }
+        await #expect(throws: PrivilegedError.self) { try await service.handle(.listDirectory("/Users")) }
+        let version = try? await LocalPrivilegedAccess(service: service).version()
+        #expect(version == AuditEngine.toolVersion)
+    }
+
+    /// The helper's sandbox must block writes outside temporary directories, including for child processes.
+    @Test func helperSandboxDeniesWrites() throws {
+        func touch(_ path: String) throws -> Int32 {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
+            p.arguments = ["-p", PrivilegedHelper.sandboxProfile, "/usr/bin/touch", path]
+            p.standardError = FileHandle.nullDevice
+            try p.run()
+            p.waitUntilExit()
+            return p.terminationStatus
+        }
+        let outside = NSHomeDirectory() + "/Library/Caches/macaudit-sandbox-test-\(UUID().uuidString)"
+        #expect(try touch(outside) != 0)
+        #expect(!FileManager.default.fileExists(atPath: outside))
+        let inside = FileManager.default.temporaryDirectory.appendingPathComponent("sandbox-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: inside) }
+        #expect(try touch(inside) == 0)
+    }
+
+    @Test func sqliteSnapshotFromData() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("snapdata-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("t.db").path
+        var db: OpaquePointer?
+        sqlite3_open(path, &db)
+        sqlite3_exec(db, "CREATE TABLE access (service TEXT); INSERT INTO access VALUES ('kTCCServiceCamera');", nil, nil, nil)
+        sqlite3_close(db)
+        let rows = try SQLiteSnapshotReader.query(snapshot: ["": try Data(contentsOf: URL(fileURLWithPath: path))],
+                                                  sql: "SELECT * FROM access")
+        #expect(rows.first?["service"]?.string == "kTCCServiceCamera")
+    }
 }

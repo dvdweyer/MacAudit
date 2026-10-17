@@ -16,7 +16,7 @@ public struct NetworkCollector: Collector {
         collectDNSAndProxies(into: &section)
         await collectVPN(into: &section, context: context)
         collectHosts(into: &section)
-        collectAirDropAndWiFi(into: &section, context: context)
+        await collectAirDropAndWiFi(into: &section, context: context)
     }
 
     private func collectListeners(into section: inout SectionResult, context: AuditContext) async {
@@ -26,11 +26,19 @@ public struct NetworkCollector: Collector {
             // macOS hides the system-wide socket table from non-Apple processes (and the tools they launch),
             // so fall back to per-process inspection.
             section.note(api: "libproc (proc_pidinfo, proc_pidfdinfo)")
-            let result = ProcSockets.listeningSockets()
+            var result = ProcSockets.listeningSockets()
+            if result.inaccessibleProcesses > 0, let privileged = context.privileged {
+                do {
+                    result = try await privileged.listeningSockets()
+                    section.note(api: "libproc (as root)")
+                } catch {
+                    section.coverage.degrade(to: .partial, "Listening ports as root: \(error)")
+                }
+            }
             sockets = result.sockets
-            if result.inaccessibleProcesses > 0 && !context.isRoot {
+            if result.inaccessibleProcesses > 0 {
                 section.coverage.degrade(to: .partial,
-                    "Listening ports of \(result.inaccessibleProcesses) processes owned by other users (e.g. root daemons such as sshd) are only visible with root (run `sudo macaudit`).")
+                    "Listening ports of \(result.inaccessibleProcesses) processes owned by other users (e.g. root daemons such as sshd) are not shown; this \(Privileges.rootHint).")
             }
         }
         section.note(api: "proc_pidpath")
@@ -159,19 +167,19 @@ public struct NetworkCollector: Collector {
         }
     }
 
-    private func collectAirDropAndWiFi(into section: inout SectionResult, context: AuditContext) {
+    private func collectAirDropAndWiFi(into section: inout SectionResult, context: AuditContext) async {
         let mode = PlistReader.preference("DiscoverableMode", domain: "com.apple.sharingd") as? String ?? "Contacts Only (default)"
         section.add(AuditItem(id: "net:airdrop", group: "Wireless", title: "AirDrop discoverability", value: mode,
                               findings: mode == "Everyone" ? [Finding(.notice, "AirDrop visible to everyone",
                                   rationale: "Anyone nearby can send AirDrop requests.")] : []))
 
         let known = "/Library/Preferences/com.apple.wifi.known-networks.plist"
-        guard context.isRoot else {
-            section.coverage.degrade(to: .partial, "Known Wi-Fi networks require root.")
+        guard context.privileged != nil else {
+            section.coverage.degrade(to: .partial, "Known Wi-Fi networks: \(Privileges.rootHint).")
             return
         }
-        section.note(file: known)
-        for (key, raw) in (PlistReader.dictionary(at: known) ?? [:]).sorted(by: { $0.key < $1.key }) {
+        guard let data = await section.readPrivileged(known, context: context) else { return }
+        for (key, raw) in (PlistReader.dictionary(from: data) ?? [:]).sorted(by: { $0.key < $1.key }) {
             let d = raw as? [String: Any] ?? [:]
             let security = d["SupportedSecurityTypes"] as? String ?? "Unknown"
             let ssid = key.replacingOccurrences(of: "wifi.network.ssid.", with: "")
@@ -184,7 +192,7 @@ public struct NetworkCollector: Collector {
 }
 
 extension Parsers {
-    struct Socket: Equatable {
+    struct Socket: Codable, Equatable {
         var proto: String
         var localAddress: String
         var foreignAddress: String

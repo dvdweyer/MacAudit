@@ -1,6 +1,7 @@
 import SwiftUI
 import AuditKit
 import UniformTypeIdentifiers
+import ServiceManagement
 
 enum SidebarItem: Hashable {
     case overview
@@ -19,12 +20,17 @@ final class AuditModel {
     var snapshots: [URL] = []
     var diff: ReportDiff?
     var errorMessage: String?
+    var helperStatus: SMAppService.Status = .notRegistered
+    /// Set when the helper is enabled but could not be reached during the last audit.
+    var helperProblem: String?
 
     let store = SnapshotStore()
     let collectors = AuditEngine.allCollectors
+    private let helperService = SMAppService.daemon(plistName: PrivilegedHelper.plistName)
 
     init() {
         snapshots = store.list()
+        refreshHelperStatus()
     }
 
     func section(_ id: String) -> SectionResult? {
@@ -38,7 +44,8 @@ final class AuditModel {
         completedSections = []
         runningSections = Set(collectors.map(\.id))
         Task {
-            let report = await AuditEngine().run { progress in
+            let context = AuditContext(privileged: await connectHelper())
+            let report = await AuditEngine().run(context: context) { progress in
                 if case .finished(let section) = progress {
                     Task { @MainActor in
                         self.runningSections.remove(section.id)
@@ -72,6 +79,57 @@ final class AuditModel {
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         compare(with: url)
+    }
+
+    // MARK: Privileged helper
+
+    func refreshHelperStatus() {
+        helperStatus = helperService.status
+    }
+
+    func installHelper() {
+        do {
+            try helperService.register()
+        } catch {
+            refreshHelperStatus()
+            // register() reports an error when the user still has to approve the daemon.
+            if helperStatus != .requiresApproval {
+                errorMessage = "Could not install the helper: \(error.localizedDescription)"
+            }
+        }
+        refreshHelperStatus()
+        if helperStatus == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
+    }
+
+    func removeHelper() {
+        Task {
+            do {
+                try await helperService.unregister()
+            } catch {
+                errorMessage = "Could not remove the helper: \(error.localizedDescription)"
+            }
+            refreshHelperStatus()
+        }
+    }
+
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+
+    private func connectHelper() async -> (any PrivilegedAccess)? {
+        refreshHelperStatus()
+        helperProblem = nil
+        guard helperStatus == .enabled else { return nil }
+        let client = XPCPrivilegedAccess()
+        do {
+            _ = try await client.version()
+            return client
+        } catch {
+            helperProblem = "The privileged helper is enabled but did not respond: \(error.localizedDescription)"
+            return nil
+        }
     }
 
     func refreshFullDiskAccess() {

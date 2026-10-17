@@ -4,7 +4,7 @@ import Darwin
 /// Enumerates listening/bound sockets per process via libproc. Without root, only processes owned
 /// by the current user can be inspected.
 enum ProcSockets {
-    struct Result {
+    struct Result: Codable {
         var sockets: [Parsers.Socket]
         var inaccessibleProcesses: Int
     }

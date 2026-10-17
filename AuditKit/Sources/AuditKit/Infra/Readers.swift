@@ -7,6 +7,10 @@ public enum PlistReader {
         return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
     }
 
+    public static func dictionary(from data: Data) -> [String: Any]? {
+        (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
+    }
+
     public static func array(at path: String) -> [Any]? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
         return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [Any]
@@ -81,22 +85,42 @@ public enum SQLiteSnapshotReader {
     public static func query(databaseAt path: String, sql: String) throws -> [[String: SQLValue]] {
         let fm = FileManager.default
         guard fm.isReadableFile(atPath: path) else { throw SQLiteError.notReadable(path) }
+        return try withSnapshotDirectory { copy in
+            do {
+                try fm.copyItem(atPath: path, toPath: copy.path)
+            } catch {
+                throw SQLiteError.notReadable(path)
+            }
+            for suffix in ["-wal", "-shm"] where fm.fileExists(atPath: path + suffix) {
+                try? fm.copyItem(atPath: path + suffix, toPath: copy.path + suffix)
+            }
+            return try open(copy, sql: sql)
+        }
+    }
 
+    /// Same, for database contents read elsewhere (e.g. by the privileged helper), keyed by
+    /// side-file suffix: "" for the database, "-wal", "-shm".
+    public static func query(snapshot files: [String: Data], sql: String) throws -> [[String: SQLValue]] {
+        guard let main = files[""] else { throw SQLiteError.notReadable("snapshot") }
+        return try withSnapshotDirectory { copy in
+            try main.write(to: copy)
+            for (suffix, data) in files where !suffix.isEmpty {
+                try data.write(to: URL(fileURLWithPath: copy.path + suffix))
+            }
+            return try open(copy, sql: sql)
+        }
+    }
+
+    private static func withSnapshotDirectory<T>(_ body: (URL) throws -> T) throws -> T {
+        let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("MacAudit-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true,
                                attributes: [.posixPermissions: 0o700])
         defer { try? fm.removeItem(at: dir) }
+        return try body(dir.appendingPathComponent("snapshot.db"))
+    }
 
-        let copy = dir.appendingPathComponent("snapshot.db")
-        do {
-            try fm.copyItem(atPath: path, toPath: copy.path)
-        } catch {
-            throw SQLiteError.notReadable(path)
-        }
-        for suffix in ["-wal", "-shm"] where fm.fileExists(atPath: path + suffix) {
-            try? fm.copyItem(atPath: path + suffix, toPath: copy.path + suffix)
-        }
-
+    private static func open(_ copy: URL, sql: String) throws -> [[String: SQLValue]] {
         var db: OpaquePointer?
         guard sqlite3_open_v2(copy.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
             throw SQLiteError.sqlite("open failed")

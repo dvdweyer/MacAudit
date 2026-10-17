@@ -31,8 +31,20 @@ public struct PrivacyPermissionsCollector: Collector {
             do {
                 rows = try SQLiteSnapshotReader.query(databaseAt: path, sql: "SELECT * FROM access")
             } catch {
-                unreadable.append(scope.lowercased())
-                continue
+                guard let privileged = context.privileged, let main = try? await privileged.readFile(path) else {
+                    unreadable.append(scope.lowercased())
+                    continue
+                }
+                section.note(file: path + " (as root)")
+                var files = ["": main]
+                for suffix in ["-wal", "-shm"] {
+                    files[suffix] = try? await privileged.readFile(path + suffix)
+                }
+                guard let snapshotRows = try? SQLiteSnapshotReader.query(snapshot: files, sql: "SELECT * FROM access") else {
+                    unreadable.append(scope.lowercased())
+                    continue
+                }
+                rows = snapshotRows
             }
             for row in rows {
                 guard let entry = TCCEntry(row: row, scope: scope) else { continue }
@@ -44,7 +56,9 @@ public struct PrivacyPermissionsCollector: Collector {
             let hint = if !context.hasFullDiskAccess {
                 " Grant Full Disk Access in System Settings › Privacy & Security."
             } else if unreadable == ["user"], userDB.hasPrefix(Self.protectedContainers) {
-                " Since macOS 27 the per-user database lives in a protected system container that Full Disk Access does not unlock, so user-level grants (Camera, Microphone, Automation, Files & Folders, …) are not shown."
+                " Since macOS 27 the per-user database lives in a protected system container that Full Disk Access does not unlock"
+                    + (context.privileged != nil ? " (not even as root)" : "")
+                    + ", so user-level grants (Camera, Microphone, Automation, Files & Folders, …) are not shown."
             } else {
                 ""
             }
@@ -53,7 +67,7 @@ public struct PrivacyPermissionsCollector: Collector {
         }
 
         collectMDMOverrides(into: &section)
-        collectLocation(into: &section, context: context)
+        await collectLocation(into: &section, context: context)
     }
 
     private func item(for entry: TCCEntry, context: AuditContext) async -> AuditItem {
@@ -116,13 +130,13 @@ public struct PrivacyPermissionsCollector: Collector {
         }
     }
 
-    private func collectLocation(into section: inout SectionResult, context: AuditContext) {
-        guard context.isRoot else {
-            section.coverage.degrade(to: .partial, "Location Services clients require root (run `sudo macaudit`).")
+    private func collectLocation(into section: inout SectionResult, context: AuditContext) async {
+        guard context.privileged != nil else {
+            section.coverage.degrade(to: .partial, "Location Services clients: \(Privileges.rootHint).")
             return
         }
-        guard let clients = PlistReader.dictionary(at: Self.locationClients) else { return }
-        section.note(file: Self.locationClients)
+        guard let data = await section.readPrivileged(Self.locationClients, context: context),
+              let clients = PlistReader.dictionary(from: data) else { return }
         for (key, raw) in clients.sorted(by: { $0.key < $1.key }) {
             guard let d = raw as? [String: Any] else { continue }
             let auth = d["Authorization"] as? Int ?? 0

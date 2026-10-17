@@ -23,7 +23,7 @@ public struct ProfilesCollector: Collector {
             }
         }
 
-        if let r = await section.run(.profilesShowConfiguration, context: context) {
+        if let r = await section.runPrivileged(.profilesShowConfiguration, context: context) {
             for p in Parsers.configurationProfiles(r.stdout) {
                 let name = p.attributes["profileDisplayName"] ?? p.attributes["profileIdentifier"] ?? "Profile"
                 section.add(AuditItem(
@@ -34,8 +34,8 @@ public struct ProfilesCollector: Collector {
                     findings: [Finding(.info, "Configuration profile installed",
                                        rationale: "Profiles can change security settings, install certificates, and configure VPNs or proxies.")]))
             }
-            if !context.isRoot {
-                section.coverage.degrade(to: .partial, "Device-level profiles may only be listed when run as root.")
+            if context.privileged == nil {
+                section.coverage.degrade(to: .partial, "Device-level profiles: \(Privileges.rootHint).")
             }
         }
 

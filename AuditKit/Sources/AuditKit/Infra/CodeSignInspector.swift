@@ -60,6 +60,8 @@ public struct SigningInfo: Codable, Sendable, Hashable {
 /// Static code-signature inspection via Security.framework. Results are cached per path.
 public actor CodeSignInspector {
     private var cache: [String: SigningInfo] = [:]
+    /// Used for files this process cannot read (e.g. root-only daemons).
+    private let privileged: (any PrivilegedAccess)?
 
     // SecRequirement is immutable once created.
     nonisolated(unsafe) private static let appleReq = requirement("anchor apple")
@@ -72,11 +74,16 @@ public actor CodeSignInspector {
     nonisolated(unsafe) private static let developerIDReq = requirement(
         "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists")
 
-    public init() {}
+    public init(privileged: (any PrivilegedAccess)? = nil) {
+        self.privileged = privileged
+    }
 
-    public func inspect(path: String) -> SigningInfo {
+    public func inspect(path: String) async -> SigningInfo {
         if let cached = cache[path] { return cached }
-        let info = Self.evaluate(path: path)
+        var info = Self.evaluate(path: path)
+        if info.status == .unreadable, let privileged, let remote = try? await privileged.signingInfo(path: path) {
+            info = remote
+        }
         cache[path] = info
         return info
     }

@@ -88,7 +88,7 @@ public struct UsersCollector: Collector {
         }
 
         await collectPasswordPolicy(into: &section, context: context)
-        collectSudoers(into: &section, context: context)
+        await collectSudoers(into: &section, context: context)
     }
 
     private func collectPasswordPolicy(into section: inout SectionResult, context: AuditContext) async {
@@ -107,19 +107,20 @@ public struct UsersCollector: Collector {
         }
     }
 
-    private func collectSudoers(into section: inout SectionResult, context: AuditContext) {
-        let fm = FileManager.default
-        var files: [String] = []
-        if fm.isReadableFile(atPath: "/etc/sudoers") { files.append("/etc/sudoers") }
-        else { section.coverage.degrade(to: .partial, "/etc/sudoers requires root.") }
-        files += fm.contents(ofDirectory: "/etc/sudoers.d").map { "/etc/sudoers.d/" + $0 }
-
+    private func collectSudoers(into section: inout SectionResult, context: AuditContext) async {
+        let files = ["/etc/sudoers"] + FileManager.default.contents(ofDirectory: "/etc/sudoers.d").map { "/etc/sudoers.d/" + $0 }
         for path in files {
-            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
-                section.coverage.degrade(to: .partial, "\(path) not readable.")
+            let text: String
+            if let local = try? String(contentsOfFile: path, encoding: .utf8) {
+                section.note(file: path)
+                text = local
+            } else if context.privileged != nil {
+                guard let data = await section.readPrivileged(path, context: context) else { continue }
+                text = String(decoding: data, as: UTF8.self)
+            } else {
+                section.coverage.degrade(to: .partial, "\(path): \(Privileges.rootHint).")
                 continue
             }
-            section.note(file: path)
             for rule in Parsers.sudoRules(text) {
                 let nopasswd = rule.contains("NOPASSWD")
                 section.add(AuditItem(id: "users:sudo:\(path):\(rule)", group: "sudo rules", title: rule, value: path,
