@@ -1,0 +1,31 @@
+name: MacAudit
+options:
+  bundleIdPrefix: org.afaik
+  deploymentTarget:
+    macOS: "26.0"
+packages:
+  AuditKit:
+    path: AuditKit
+targets:
+  MacAudit:
+    type: application
+    platform: macOS
+    sources: [MacAudit]
+    dependencies:
+      - package: AuditKit
+        product: AuditKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.afaik.MacAudit
+        PRODUCT_NAME: MacAudit
+        DEVELOPMENT_TEAM: R4J8ZNC9HF
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: NO
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: MacAudit
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "1"
