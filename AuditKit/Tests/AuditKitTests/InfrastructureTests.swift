@@ -83,14 +83,15 @@ import SQLite3
     }
 
     @Test func privilegedPolicyOnlyAllowsRootOnlyReads() {
+        let me = PrivilegedCaller(uid: getuid())
         #expect(PrivilegedPolicy.commands.allSatisfy { AllowedCommand.allCases.contains($0) })
         #expect(PrivilegedPolicy.canRun(.sfltoolDumpBTM))
         #expect(!PrivilegedPolicy.canRun(.netstat))
 
-        #expect(PrivilegedPolicy.canRead("/etc/sudoers"))
-        #expect(!PrivilegedPolicy.canRead("/etc/master.passwd"))
-        #expect(!PrivilegedPolicy.canRead("/etc/sudoers.d/../master.passwd"))
-        #expect(!PrivilegedPolicy.canRead("etc/sudoers"))
+        #expect(PrivilegedPolicy.canRead("/etc/sudoers", caller: me))
+        #expect(!PrivilegedPolicy.canRead("/etc/master.passwd", caller: me))
+        #expect(!PrivilegedPolicy.canRead("/etc/sudoers.d/../master.passwd", caller: me))
+        #expect(!PrivilegedPolicy.canRead("etc/sudoers", caller: me))
         #expect(PrivilegedPolicy.canList("/etc/sudoers.d"))
         #expect(!PrivilegedPolicy.canList("/etc"))
 
@@ -99,6 +100,24 @@ import SQLite3
         #expect(PrivilegedPolicy.isUserTCCDatabase(tcc + "TCC.db-wal"))
         #expect(!PrivilegedPolicy.isUserTCCDatabase(tcc + "other.db"))
         #expect(!PrivilegedPolicy.isUserTCCDatabase(tcc.replacingOccurrences(of: "B97B32AB-3D8F-46A2-A0A6-18C2E5C2B0CE", with: "x/y") + "TCC.db"))
+        // Another user's (here: nonexistent) container is never readable for a non-root caller.
+        let other = tcc.replacingOccurrences(of: "B97B32AB-3D8F-46A2-A0A6-18C2E5C2B0CE", with: UUID().uuidString) + "TCC.db"
+        #expect(!PrivilegedPolicy.canRead(other, caller: me))
+    }
+
+    @Test func signingInspectionIsLimitedToSystemAndOwnLocations() {
+        let me = PrivilegedCaller(uid: getuid())
+        #expect(PrivilegedPolicy.canInspectSigning("/usr/bin/true", caller: me))
+        #expect(PrivilegedPolicy.canInspectSigning(NSHomeDirectory() + "/Library", caller: me))
+        // Per-user temporary folders (and other users' homes) are outside the allowed roots.
+        #expect(!PrivilegedPolicy.canInspectSigning(FileManager.default.temporaryDirectory.path, caller: me))
+        #expect(!PrivilegedPolicy.canInspectSigning("relative/path", caller: me))
+        #expect(PrivilegedPolicy.canInspectSigning(FileManager.default.temporaryDirectory.path, caller: .root))
+    }
+
+    @Test func onlyAdministratorsMayUseTheHelper() {
+        #expect(PrivilegedCaller.root.isAdministrator)
+        #expect(!PrivilegedCaller(uid: 4_000_000).isAdministrator)
     }
 
     @Test func privilegedPolicyResolvesSymlinks() throws {
@@ -107,35 +126,65 @@ import SQLite3
         defer { try? FileManager.default.removeItem(at: dir) }
         let link = dir.appendingPathComponent("sudoers")
         try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "/etc/master.passwd")
-        #expect(!PrivilegedPolicy.canRead(link.path))
+        #expect(!PrivilegedPolicy.canRead(link.path, caller: PrivilegedCaller(uid: getuid())))
     }
 
     @Test func privilegedServiceRejectsRequestsOutsidePolicy() async {
         let service = PrivilegedService()
-        await #expect(throws: PrivilegedError.self) { try await service.handle(.run(.netstat)) }
-        await #expect(throws: PrivilegedError.self) { try await service.handle(.readFile("/etc/master.passwd")) }
-        await #expect(throws: PrivilegedError.self) { try await service.handle(.listDirectory("/Users")) }
+        let me = PrivilegedCaller(uid: getuid())
+        await #expect(throws: PrivilegedError.self) { try await service.handle(.run(.netstat), caller: me) }
+        await #expect(throws: PrivilegedError.self) { try await service.handle(.readFile("/etc/master.passwd"), caller: me) }
+        await #expect(throws: PrivilegedError.self) { try await service.handle(.listDirectory("/Users"), caller: me) }
+        await #expect(throws: PrivilegedError.self) {
+            try await service.handle(.signingInfo(FileManager.default.temporaryDirectory.path), caller: me)
+        }
         let version = try? await LocalPrivilegedAccess(service: service).version()
         #expect(version == AuditEngine.toolVersion)
     }
 
-    /// The helper's sandbox must block writes outside temporary directories, including for child processes.
-    @Test func helperSandboxDeniesWrites() throws {
-        func touch(_ path: String) throws -> Int32 {
+    /// The helper's sandbox must block writes outside its own directories and launching other
+    /// programs, including for child processes.
+    @Test func helperSandboxRestrictsWritesAndExec() throws {
+        let allowed = FileManager.default.temporaryDirectory.appendingPathComponent("sandbox-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: allowed, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: allowed) }
+        let profile = PrivilegedHelper.sandboxProfile(writableDirectories: [PrivilegedPolicy.resolve(allowed.path)!],
+                                                      executables: ["/usr/bin/touch"])
+        func run(_ arguments: [String]) throws -> Int32 {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-            p.arguments = ["-p", PrivilegedHelper.sandboxProfile, "/usr/bin/touch", path]
+            p.arguments = ["-p", profile] + arguments
             p.standardError = FileHandle.nullDevice
             try p.run()
             p.waitUntilExit()
             return p.terminationStatus
         }
         let outside = NSHomeDirectory() + "/Library/Caches/macaudit-sandbox-test-\(UUID().uuidString)"
-        #expect(try touch(outside) != 0)
+        #expect(try run(["/usr/bin/touch", outside]) != 0)
         #expect(!FileManager.default.fileExists(atPath: outside))
-        let inside = FileManager.default.temporaryDirectory.appendingPathComponent("sandbox-\(UUID().uuidString)").path
-        defer { try? FileManager.default.removeItem(atPath: inside) }
-        #expect(try touch(inside) == 0)
+        let tmp = "/private/tmp/macaudit-sandbox-test-\(UUID().uuidString)"
+        #expect(try run(["/usr/bin/touch", tmp]) != 0)
+        #expect(!FileManager.default.fileExists(atPath: tmp))
+        #expect(try run(["/usr/bin/touch", allowed.appendingPathComponent("ok").path]) == 0)
+        #expect(try run(["/usr/bin/true"]) != 0)
+    }
+
+    @Test func helperSandboxAllowsItsCommands() {
+        #expect(PrivilegedService.executables == ["/usr/bin/profiles", "/usr/bin/sfltool"])
+    }
+
+    /// A descendant that keeps the output pipe open must not block the runner past the timeout.
+    @Test func commandTimeoutDoesNotHang() throws {
+        let start = Date()
+        // Both the shell and its background child ignore SIGTERM, so only SIGKILL stops the shell
+        // and the child keeps the pipe open; the runner has to give up waiting for EOF.
+        let result = try CommandRunner.execute(path: "/bin/sh",
+                                               arguments: ["-c", "trap '' TERM; echo started; sleep 8 & sleep 8"],
+                                               timeout: 1, cap: 1024)
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(result.timedOut)
+        #expect(result.stdout.contains("started"))
+        #expect(elapsed > 4 && elapsed < 7.5)
     }
 
     @Test func sqliteSnapshotFromData() throws {

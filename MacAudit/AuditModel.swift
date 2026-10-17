@@ -122,6 +122,10 @@ final class AuditModel {
         refreshHelperStatus()
         helperProblem = nil
         guard helperStatus == .enabled else { return nil }
+        guard PrivilegedCaller(uid: getuid()).isAdministrator else {
+            helperProblem = "Root access through the helper is only available to administrator accounts."
+            return nil
+        }
         let client = XPCPrivilegedAccess()
         do {
             _ = try await client.version()

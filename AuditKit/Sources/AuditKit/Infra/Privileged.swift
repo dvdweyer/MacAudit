@@ -50,12 +50,30 @@ enum PrivilegedPolicy {
         return directories.contains { resolve($0) == resolved }
     }
 
-    static func canRead(_ path: String) -> Bool {
+    static func canRead(_ path: String, caller: PrivilegedCaller) -> Bool {
         guard let resolved = resolve(path) else { return false }
         if files.contains(where: { resolve($0) == resolved }) { return true }
-        if isUserTCCDatabase(resolved) { return true }
+        if isUserTCCDatabase(resolved) {
+            // Only the caller's own database: the one their tccd has open.
+            if caller.isRoot { return true }
+            guard let own = PrivacyPermissionsCollector.tccdDatabase(uid: caller.uid) else { return false }
+            return [own, own + "-wal", own + "-shm"].contains(resolved)
+        }
         let parent = (resolved as NSString).deletingLastPathComponent
         return directories.contains { resolve($0) == parent }
+    }
+
+    /// Where unreadable code may legitimately live (system and app locations, common malware
+    /// staging areas), plus the caller's home. Other users' homes are excluded so the helper
+    /// cannot be used to probe them.
+    static let signingRoots = ["/Applications/", "/Library/", "/System/", "/usr/", "/bin/", "/sbin/", "/opt/",
+                               "/private/etc/", "/private/var/db/", "/private/tmp/", "/private/var/tmp/", "/Users/Shared/"]
+
+    static func canInspectSigning(_ path: String, caller: PrivilegedCaller) -> Bool {
+        if caller.isRoot { return true }
+        guard let resolved = resolve(path) else { return false }
+        if let home = caller.home.flatMap(resolve), resolved.hasPrefix(home + "/") { return true }
+        return signingRoots.contains { resolved.hasPrefix($0) }
     }
 
     /// `/private/var/containers/Data/ProtectedSystem/<UUID>/Data/Library/Application Support/com.apple.TCC/TCC.db[-wal|-shm]`
@@ -84,12 +102,15 @@ public struct PrivilegedService: Sendable {
     let runner: CommandRunner
     let signing: CodeSignInspector
 
+    /// Programs the helper's sandbox must allow it to launch.
+    public static var executables: [String] { PrivilegedPolicy.commands.map(\.invocation.path).sorted() }
+
     public init(runner: CommandRunner = CommandRunner(), signing: CodeSignInspector = CodeSignInspector()) {
         self.runner = runner
         self.signing = signing
     }
 
-    public func handle(_ request: PrivilegedRequest) async throws -> Data {
+    public func handle(_ request: PrivilegedRequest, caller: PrivilegedCaller) async throws -> Data {
         let encoder = JSONEncoder()
         switch request {
         case .version:
@@ -98,7 +119,7 @@ public struct PrivilegedService: Sendable {
             guard PrivilegedPolicy.canRun(command) else { throw PrivilegedError.notAllowed(command.displayString) }
             return try encoder.encode(try await runner.run(command))
         case .readFile(let path):
-            guard PrivilegedPolicy.canRead(path) else { throw PrivilegedError.notAllowed(path) }
+            guard PrivilegedPolicy.canRead(path, caller: caller) else { throw PrivilegedError.notAllowed(path) }
             let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
             defer { try? handle.close() }
             let data = try handle.read(upToCount: PrivilegedPolicy.maxFileSize) ?? Data()
@@ -107,7 +128,7 @@ public struct PrivilegedService: Sendable {
             guard PrivilegedPolicy.canList(path) else { throw PrivilegedError.notAllowed(path) }
             return try encoder.encode(try FileManager.default.contentsOfDirectory(atPath: path).sorted())
         case .signingInfo(let path):
-            guard path.hasPrefix("/") else { throw PrivilegedError.notAllowed(path) }
+            guard PrivilegedPolicy.canInspectSigning(path, caller: caller) else { throw PrivilegedError.notAllowed(path) }
             return try encoder.encode(await signing.inspect(path: path))
         case .listeningSockets:
             return try encoder.encode(ProcSockets.listeningSockets())
@@ -122,7 +143,7 @@ public struct LocalPrivilegedAccess: PrivilegedAccess {
     public init(service: PrivilegedService = PrivilegedService()) { self.service = service }
 
     public func perform(_ request: PrivilegedRequest) async throws -> Data {
-        try await service.handle(request)
+        try await service.handle(request, caller: .root)
     }
 }
 

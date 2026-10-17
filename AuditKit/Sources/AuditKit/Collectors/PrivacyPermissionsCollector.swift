@@ -18,8 +18,13 @@ public struct PrivacyPermissionsCollector: Collector {
     static func userDatabasePath(home: String) -> String {
         let legacy = home + "/Library/Application Support/com.apple.TCC/TCC.db"
         if FileManager.default.fileExists(atPath: legacy) { return legacy }
-        let open = ProcFiles.pids(named: "tccd").flatMap(ProcFiles.openPaths)
-        return open.first { $0.hasSuffix("/com.apple.TCC/TCC.db") && $0 != systemDB } ?? legacy
+        return tccdDatabase(uid: getuid()) ?? legacy
+    }
+
+    /// The per-user TCC database held open by that user's tccd.
+    static func tccdDatabase(uid: uid_t) -> String? {
+        ProcFiles.pids(named: "tccd", uid: uid).flatMap(ProcFiles.openPaths)
+            .first { $0.hasSuffix("/com.apple.TCC/TCC.db") && $0 != systemDB }
     }
 
     public func collect(into section: inout SectionResult, context: AuditContext) async {

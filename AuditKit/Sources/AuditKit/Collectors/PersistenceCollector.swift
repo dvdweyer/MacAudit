@@ -134,7 +134,8 @@ public struct PersistenceCollector: Collector {
                 for user in try await privileged.listDirectory(tabs) where user != NSUserName() {
                     let text = await section.readPrivileged(tabs + "/" + user, context: context)
                         .map { String(decoding: $0, as: UTF8.self) } ?? ""
-                    let jobs = text.split(separator: "\n").map { String($0).trimmed }.filter { !$0.isEmpty && !$0.hasPrefix("#") }
+                    // Other users' command lines can contain credentials: keep only schedule and program.
+                    let jobs = text.split(separator: "\n").compactMap { Parsers.cronJobSummary(String($0)) }
                     section.add(AuditItem(id: "persist:cron:tab:\(user)", group: "Cron jobs", title: "crontab for \(user)",
                                           value: jobs.isEmpty ? "Present" : "\(jobs.count) job(s)",
                                           details: jobs.isEmpty ? [:] : ["Jobs": jobs.joined(separator: "\n")],
@@ -207,5 +208,21 @@ extension Parsers {
         }
         if let c = current, !c.isEmpty { items.append(c) }
         return items
+    }
+}
+
+extension Parsers {
+    /// "<schedule> <program>", with arguments replaced by "…". Comments, blank lines and
+    /// environment assignments (which may hold secrets) yield nil.
+    static func cronJobSummary(_ line: String) -> String? {
+        let text = line.trimmed
+        guard !text.isEmpty, !text.hasPrefix("#") else { return nil }
+        let tokens = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        let scheduleLength = tokens[0].hasPrefix("@") ? 1 : 5
+        if scheduleLength == 5, tokens[0].contains("=") { return nil }
+        guard tokens.count > scheduleLength else { return nil }
+        let schedule = tokens[..<scheduleLength].joined(separator: " ")
+        let hasArguments = tokens.count > scheduleLength + 1
+        return "\(schedule) \(tokens[scheduleLength])" + (hasArguments ? " …" : "")
     }
 }

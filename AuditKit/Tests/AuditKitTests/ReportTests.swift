@@ -55,5 +55,10 @@ import Foundation
         let url = try store.save(report([AuditItem(id: "a", group: "g", title: "A", value: "1")]))
         #expect(store.list().map(\.lastPathComponent) == [url.lastPathComponent])
         #expect(try store.load(url).sections[0].items.count == 1)
+        let permissions = { (path: String) in
+            (try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)?.intValue
+        }
+        #expect(try permissions(dir.path) == 0o700)
+        #expect(try permissions(url.path) == 0o600)
     }
 }

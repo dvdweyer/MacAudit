@@ -101,12 +101,17 @@ public final class SnapshotStore: Sendable {
             .appendingPathComponent("MacAudit/Snapshots", isDirectory: true)
     }
 
+    /// Snapshots can contain root-only data, so the directory is private (0700) before anything is
+    /// written into it, and each file is 0600.
     @discardableResult
     public func save(_ report: AuditReport) throws -> URL {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fm = FileManager.default
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         let name = report.generatedAt.formatted(.iso8601).replacingOccurrences(of: ":", with: "-")
         let url = directory.appendingPathComponent("audit-\(name).json")
         try JSONExporter.encode(report).write(to: url, options: .atomic)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return url
     }
 

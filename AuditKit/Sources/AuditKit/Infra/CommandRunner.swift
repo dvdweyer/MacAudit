@@ -141,7 +141,7 @@ public struct CommandRunner: Sendable {
         }.value
     }
 
-    private static func execute(path: String, arguments: [String], timeout: TimeInterval, cap: Int) throws -> CommandResult {
+    static func execute(path: String, arguments: [String], timeout: TimeInterval, cap: Int) throws -> CommandResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
@@ -159,42 +159,56 @@ public struct CommandRunner: Sendable {
         }
 
         let group = DispatchGroup()
-        nonisolated(unsafe) var outData = Data()
-        nonisolated(unsafe) var errData = Data()
-        group.enter()
-        DispatchQueue.global().async {
-            outData = Self.drain(out.fileHandleForReading, cap: cap)
-            group.leave()
-        }
-        group.enter()
-        DispatchQueue.global().async {
-            errData = Self.drain(err.fileHandleForReading, cap: cap)
-            group.leave()
+        let outData = LockedData()
+        let errData = LockedData()
+        for (pipe, buffer) in [(out, outData), (err, errData)] {
+            group.enter()
+            DispatchQueue.global().async {
+                Self.drain(pipe.fileHandleForReading, into: buffer, cap: cap)
+                group.leave()
+            }
         }
 
+        // Escalate: SIGTERM, then SIGKILL. If a descendant still holds the pipes open, stop waiting
+        // and return what was read so far instead of blocking the audit (or the root helper).
         var timedOut = false
         if group.wait(timeout: .now() + timeout) == .timedOut {
             timedOut = true
             process.terminate()
-            group.wait()
+            if group.wait(timeout: .now() + 3) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = group.wait(timeout: .now() + 2)
+            }
         }
         process.waitUntilExit()
 
         return CommandResult(
             exitCode: process.terminationStatus,
-            stdout: String(decoding: outData, as: UTF8.self),
-            stderr: String(decoding: errData, as: UTF8.self),
+            stdout: String(decoding: outData.value, as: UTF8.self),
+            stderr: String(decoding: errData.value, as: UTF8.self),
             timedOut: timedOut
         )
     }
 
-    private static func drain(_ handle: FileHandle, cap: Int) -> Data {
-        var data = Data()
+    private static func drain(_ handle: FileHandle, into buffer: LockedData, cap: Int) {
         while true {
             let chunk = handle.availableData
             if chunk.isEmpty { break }
+            buffer.append(chunk, cap: cap)
+        }
+    }
+}
+
+/// Output buffer shared between a drain thread and the runner, which may read it before the drain finishes.
+private final class LockedData: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data, cap: Int) {
+        lock.withLock {
             if data.count < cap { data.append(chunk.prefix(cap - data.count)) }
         }
-        return data
     }
+
+    var value: Data { lock.withLock { data } }
 }

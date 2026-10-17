@@ -314,4 +314,12 @@ import Foundation
         #expect(Parsers.minimumPasswordLength(policies) == 4)
         #expect(Parsers.passwordPolicies("Getting global account policies\nNo policies") == [])
     }
+
+    @Test func cronJobSummaryDropsArguments() {
+        #expect(Parsers.cronJobSummary("*/5 * * * * /usr/local/bin/backup --token s3cr3t") == "*/5 * * * * /usr/local/bin/backup …")
+        #expect(Parsers.cronJobSummary("@reboot /opt/agent") == "@reboot /opt/agent")
+        #expect(Parsers.cronJobSummary("MAILTO=admin@example.com") == nil)
+        #expect(Parsers.cronJobSummary("# comment") == nil)
+        #expect(Parsers.cronJobSummary("   ") == nil)
+    }
 }
