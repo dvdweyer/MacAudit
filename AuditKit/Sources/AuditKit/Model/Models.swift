@@ -82,6 +82,10 @@ public struct AuditItem: Codable, Sendable, Identifiable, Hashable {
     }
 
     public var highestSeverity: Severity? { findings.map(\.severity).max() }
+
+    /// Detail key holding a System Settings URL for something the user has to check by hand.
+    public static let settingsLinkKey = "System Settings"
+    public var settingsURL: URL? { details[Self.settingsLinkKey].flatMap(URL.init(string:)) }
 }
 
 public struct SectionResult: Codable, Sendable, Identifiable {

@@ -111,6 +111,11 @@ struct ItemRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .textSelection(.enabled)
+            if let url = item.settingsURL {
+                Button("Open") { NSWorkspace.shared.open(url) }
+                    .controlSize(.small)
+                    .help("Open this pane in System Settings")
+            }
         }
     }
 }
@@ -139,7 +144,9 @@ struct ItemInspector: View {
                 if !item.details.isEmpty {
                     Divider()
                     ForEach(item.details.keys.sorted(), id: \.self) { key in
-                        if let value = item.details[key], !value.isEmpty {
+                        if key == AuditItem.settingsLinkKey, let url = item.settingsURL {
+                            Link("Open in System Settings", destination: url).font(.callout)
+                        } else if let value = item.details[key], !value.isEmpty {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(key).font(.caption).foregroundStyle(.secondary)
                                 Text(value).font(.callout).textSelection(.enabled)

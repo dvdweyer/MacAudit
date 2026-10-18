@@ -200,4 +200,17 @@ import SQLite3
                                                   sql: "SELECT * FROM access")
         #expect(rows.first?["service"]?.string == "kTCCServiceCamera")
     }
+
+    /// The review links only work if System Settings knows the anchors.
+    @Test func reviewPaneAnchorsExist() throws {
+        // Anchors are in the binary and in TCCServiceList.plist (revealElementKeyName).
+        let contents = "/System/Library/ExtensionKit/Extensions/SecurityPrivacyExtension.appex/Contents/"
+        let files = try ["MacOS/SecurityPrivacyExtension", "Resources/TCCServiceList.plist"].map {
+            try Data(contentsOf: URL(fileURLWithPath: contents + $0))
+        }
+        for pane in PrivacyPermissionsCollector.reviewPanes {
+            #expect(files.contains { $0.range(of: Data(pane.anchor.utf8)) != nil }, "\(pane.anchor) not found")
+            #expect(URL(string: PrivacyPermissionsCollector.settingsURL(anchor: pane.anchor)) != nil)
+        }
+    }
 }

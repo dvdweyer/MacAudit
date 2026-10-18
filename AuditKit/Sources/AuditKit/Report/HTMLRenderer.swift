@@ -46,7 +46,12 @@ public enum HTMLRenderer {
                 body += "<h3>\(esc(group))</h3><table>"
                 for item in groups[group] ?? [] {
                     let sev = item.highestSeverity.map { " class=\"row-\($0.rawValue)\"" } ?? ""
-                    body += "<tr\(sev)><td class=\"t\">\(esc(item.title))</td><td>\(esc(item.value))"
+                    body += "<tr\(sev)><td class=\"t\">\(esc(item.title))</td><td>"
+                    if let url = item.settingsURL {
+                        body += "<a href=\"\(esc(url.absoluteString))\">\(esc(item.value))</a>"
+                    } else {
+                        body += esc(item.value)
+                    }
                     for f in item.findings {
                         body += "<div class=\"finding\"><span class=\"pill \(f.severity.rawValue)\">\(f.severity.rawValue)</span> \(esc(f.title)) — <span class=\"why\">\(esc(f.rationale))</span></div>"
                     }

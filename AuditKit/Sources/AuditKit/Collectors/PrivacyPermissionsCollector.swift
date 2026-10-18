@@ -13,6 +13,34 @@ public struct PrivacyPermissionsCollector: Collector {
     static let locationClients = "/var/db/locationd/clients.plist"
     static let protectedContainers = "/private/var/containers/Data/ProtectedSystem/"
 
+    /// Privacy & Security panes for grants stored in the per-user database, offered for manual review when it
+    /// can't be read. Anchors are taken from SecurityPrivacyExtension.appex (macOS 27).
+    static let reviewPanes: [(title: String, anchor: String)] = [
+        ("Camera", "Privacy_Camera"),
+        ("Microphone", "Privacy_Microphone"),
+        ("System Audio Recording", "Privacy_AudioCapture"),
+        ("Automation", "Privacy_Automation"),
+        ("Files & Folders", "Privacy_FilesAndFolders"),
+        ("App Management", "Privacy_AppBundles"),
+        ("App Data", "Privacy_AppContainer"),
+        ("Photos", "Privacy_Photos"),
+        ("Contacts", "Privacy_Contacts"),
+        ("Calendars", "Privacy_Calendars"),
+        ("Reminders", "Privacy_Reminders"),
+        ("Bluetooth", "Privacy_Bluetooth"),
+        ("Speech Recognition", "Privacy_SpeechRecognition"),
+        ("Media & Apple Music", "Privacy_Media"),
+        ("Paste from Other Apps", "Privacy_Pasteboard"),
+        ("Passkeys Access for Web Browsers", "Privacy_PasskeyAccess"),
+        ("Home", "Privacy_HomeKit"),
+        ("Focus", "Privacy_Focus"),
+        ("Motion & Fitness", "Privacy_Motion"),
+    ]
+
+    static func settingsURL(anchor: String) -> String {
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?" + anchor
+    }
+
     /// macOS 27 moved the per-user database from ~/Library into a ProtectedSystem container with a per-install UUID.
     /// The path is taken from the files the user's own tccd has open.
     static func userDatabasePath(home: String) -> String {
@@ -64,11 +92,20 @@ public struct PrivacyPermissionsCollector: Collector {
                 " Since macOS 27 the per-user database lives in a protected system container that Full Disk Access does not unlock"
                     + (context.privileged != nil ? " (not even as root)" : "")
                     + ", so user-level grants (Camera, Microphone, Automation, Files & Folders, …) are not shown."
+                    + " They are listed under “Review in System Settings” with a link to each pane."
             } else {
                 ""
             }
             section.coverage.degrade(to: unreadable.count == 2 ? .unavailable : .partial,
                                      "Could not read the \(unreadable.joined(separator: " and ")) TCC database.\(hint)")
+        }
+        if unreadable.contains("user") {
+            for pane in Self.reviewPanes {
+                section.add(AuditItem(
+                    id: "tcc:review:\(pane.anchor)", group: "Review in System Settings", title: pane.title,
+                    value: "Check manually",
+                    details: [AuditItem.settingsLinkKey: Self.settingsURL(anchor: pane.anchor)]))
+            }
         }
 
         collectMDMOverrides(into: &section)

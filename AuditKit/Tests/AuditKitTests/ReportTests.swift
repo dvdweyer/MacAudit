@@ -48,6 +48,13 @@ import Foundation
         #expect(html.contains("a&amp;b"))
     }
 
+    @Test func htmlLinksSettingsPanes() {
+        let url = PrivacyPermissionsCollector.settingsURL(anchor: "Privacy_Camera")
+        let html = HTMLRenderer.render(report([AuditItem(id: "x", group: "g", title: "Camera", value: "Check manually",
+                                                         details: [AuditItem.settingsLinkKey: url])]))
+        #expect(html.contains("<a href=\"\(url)\">Check manually</a>"))
+    }
+
     @Test func snapshotStore() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("snap-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
