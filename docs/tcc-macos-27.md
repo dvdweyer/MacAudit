@@ -93,6 +93,7 @@ Apple has not given a reason. This is the researchers' reading, with my inferenc
 ## Implications for MacAudit
 
 - `PrivacyPermissionsCollector` reports the system TCC.db (with Full Disk Access) and marks the per-user part unavailable, with a coverage note.
+- When the per-user database can't be read, the section lists a "Review in System Settings" group: one item per user-level permission (`tcc:review:<anchor>`), each with a direct link to its Privacy & Security pane (`x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?<anchor>`). The anchors come from `SecurityPrivacyExtension.appex` (its binary and `TCCServiceList.plist`). `InfrastructureTests.reviewPaneAnchorsExist` checks that they still exist. Screen scraping System Settings was rejected: it would need Accessibility or Screen Recording, would mean operating the window, and the panes don't show every grant (for example, access granted through file pickers).
 - Possible addition: on MDM-managed Macs, call `tccutil list -s <service>` (and `-s -b` for granted/denied) through the `AllowedCommand` allowlist. The service names would come from a fixed list. The parser would stay unverified until real output is captured on an enrolled Mac.
 - Other tools hit the same wall: osquery/Fleet's `tcc_access` returns only system rows on macOS 27 (fleetdm/fleet #53273).
 

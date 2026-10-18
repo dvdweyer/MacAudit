@@ -1,6 +1,6 @@
 # Backlog
 
-Known coverage gaps and unverified areas, as of v0.0.6.
+Known coverage gaps and unverified areas, as of v0.0.7.
 
 ## Verify with the privileged helper (needs a real root run)
 
@@ -35,3 +35,4 @@ The helper and `sudo macaudit` now cover the root-only data below, but none of i
 
 - [ ] PDF export (app only)
 - [ ] App UI, including the new Settings › Root access pane (not exercised by automated tests)
+- [ ] "Review in System Settings" links open the right Privacy & Security pane. The anchors exist in System Settings, but navigation hasn't been tried. `Privacy_Pasteboard` and `Privacy_AppContainer` appear only in the extension binary, not in `TCCServiceList.plist` or the search terms.
